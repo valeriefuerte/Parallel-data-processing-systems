@@ -7,7 +7,7 @@
 
 int handling(int *array, int count)
 {
-	return array[count];
+	return array[0];
 }
 
 int main(int argc, char *argv[]) {
@@ -21,9 +21,9 @@ int main(int argc, char *argv[]) {
 	int A[N];
 	for(int i = 0; i < N; i++){
 	    A[i] = rand() % 10;
-        printf("%d", A[i]);
+        // printf("%d", A[i]);
     }
-    printf("\n");
+    // printf("\n");
 
 	MPI_Init(&argc, &argv);
 
@@ -35,7 +35,7 @@ int main(int argc, char *argv[]) {
 
 	int *array = (int *)malloc(N * sizeof(int));
 	int after_handling = 0;
-	int result = 0;
+	int result[size];
 
 	if (rank == 0) {
 		if (size == 2) {
@@ -61,17 +61,24 @@ int main(int argc, char *argv[]) {
 	else {
 		MPI_Recv(array, k, MPI_INT, MPI_ANY_SOURCE, tag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 		after_handling = handling(array, m);
-		printf("Smth from P%d is %d.\n", rank, after_handling);
+		// printf("Smth from P%d is %d.\n", rank, after_handling);
+		MPI_Send(&after_handling, 1, MPI_INT, 0, tag, MPI_COMM_WORLD);
 	}
-	/*
-	At this point, every rank in communicator has valid information stored in localMin.
-	Use MPI_Reduce in order to find the global min among all ranks.
-	Store this single result on rank == ROOT.
-	*/
-	MPI_Reduce(&after_handling, &result, 1, MPI_INT, MPI_MIN, 0, MPI_COMM_WORLD);
-
-	if (rank == 0)
-		printf("Result: %d\n", result);
+	
+	MPI_Status Status;
+	if(rank == 0)
+	{
+		int tmp;
+		for(int i = 1; i < size; i++){
+			MPI_Recv(&tmp, 1, MPI_INT, MPI_ANY_SOURCE, tag, MPI_COMM_WORLD, &Status);
+			int index = Status.MPI_SOURCE;
+			result[index] = tmp;
+		}
+		printf("Result:\n");
+		for(int i = 1; i < size; i++){
+			printf("%d\n", result[i]);
+		}
+	}
 
 	MPI_Finalize();
 	return 0;
