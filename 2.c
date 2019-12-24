@@ -48,10 +48,10 @@ int main(int argc, char *argv[]) {
 		else
 			for(int dest = 1; dest < size; ++dest)
 			{
-				n = m + (k-1)/2;
+				n = m + (k-1)/2; //кусок массива, который отрезается
 				// printf("m: %d\n (k+1)/2: %d\n", m, n);
-				k = N - n;
-				m = n + 1;				
+				k = N - n; //k - то, что осталось
+				m = n + 1; //m - указывает на начало передаваемой части				
 				MPI_Send(&A[(dest-1)*k], k, MPI_INT, dest, tag, MPI_COMM_WORLD);
 				printf("P0 sent %d elements to P%d.\n", k, dest);
 			}
