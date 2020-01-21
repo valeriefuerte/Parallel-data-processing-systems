@@ -1,103 +1,108 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <sys/time.h>
-#include "mpi.h"
+#include <mpi.h>
+#include <iostream>
 
-#define N 4/* number of rows and columns in matrix */
+#include "matrix_functions.h"
 
-main(int argc, char **argv)
+int ProcNum; 
+int ProcRank;
+int matrix_size = 3;
+double *A;
+double *B;
+double *C;
+
+double multiply_matrix(double *A, double *B,  double *C, int size) //Parallel Ribbonn algo
 {
-  int ProcNum,rank,source,dest,rows,offset;
+    double *bufA, *bufB, *bufC;
+    int new_size = size;
 
-  struct timeval start, stop;
+    MPI_Status Status;
 
-  MPI_Init(&argc, &argv);
-  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-  MPI_Comm_size(MPI_COMM_WORLD, &ProcNum);
-  MPI_Status status;
+    int proc_size = new_size/ProcNum; //process part size
+    int proc_elem = proc_size*new_size; //process part element
 
-  double a[N][N],b[N][N],c[N][N];
+    bufA = new double[proc_elem];
+    bufB = new double[proc_elem];
+    bufC = new double[proc_elem];
 
-  if (rank == 0) {
-    for (int i=0; i<N; i++) {
-      for (int j=0; j<N; j++) {
-        a[i][j]= rand() % 10;
-        b[i][j]= rand() % 10;
-      }
-    }
-
-    gettimeofday(&start, 0);
-
-    /* send matrix data to the worker tasks */
-    rows = N/(ProcNum-1);
-    offset = 0;
-
-    for (dest=1; dest<=ProcNum-1; dest++)
+    for (int i = 0; i < proc_elem; i++)
     {
-      MPI_Send(&offset, 1, MPI_INT, dest, 1, MPI_COMM_WORLD);
-      MPI_Send(&rows, 1, MPI_INT, dest, 1, MPI_COMM_WORLD);
-      MPI_Send(&a[offset][0], rows*N, MPI_DOUBLE,dest,1, MPI_COMM_WORLD);
-      MPI_Send(&b, N*N, MPI_DOUBLE, dest, 1, MPI_COMM_WORLD);
-      offset = offset + rows;
+        bufC[i] = 0;
     }
+        
+    double start_time = MPI_Wtime(); //возвращает количество секунд, представляя полное время по отношению к некоторому моменту времени в прошлом. 
+    MPI_Scatter(A, proc_elem, MPI_DOUBLE, bufA, proc_elem, MPI_DOUBLE, 0, MPI_COMM_WORLD); //рассылка
+    MPI_Scatter(B, proc_elem, MPI_DOUBLE, bufB, proc_elem, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
-    /* wait for results from all worker tasks */
-    for (int i=1; i<=ProcNum-1; i++)
+    int NextProc = ProcRank + 1;
+    if ( ProcRank == ProcNum - 1 ) NextProc = 0;
+
+    int PrevProc = ProcRank - 1;
+    if ( ProcRank == 0 ) PrevProc = ProcNum - 1;
+
+    int PrevNum = ProcRank;
+    for (int p = 0; p < ProcNum; p++)
     {
-      source = i;
-      MPI_Recv(&offset, 1, MPI_INT, source, 2, MPI_COMM_WORLD, &status);
-      MPI_Recv(&rows, 1, MPI_INT, source, 2, MPI_COMM_WORLD, &status);
-      MPI_Recv(&c[offset][0], rows*N, MPI_DOUBLE, source, 2, MPI_COMM_WORLD, &status);
+        for (int i = 0; i < proc_size; i++)
+        {
+            for (int j = 0; j < size; j++)
+            {
+                double tmp = 0;
+                for (int k = 0; k < proc_size; k++)
+                    tmp += bufA[PrevNum * proc_size + i * size + k] * bufB[k * size + j];
+                bufC[i * size + j] += tmp;
+            }
+        }
+
+        PrevNum -= 1;
+
+        if (PrevNum < 0)
+            PrevNum = ProcNum - 1;
+
+        //Совмещенные прием и передача
+        MPI_Sendrecv_replace(bufB, proc_elem, MPI_DOUBLE, NextProc, 0, PrevProc, 0, MPI_COMM_WORLD, &Status);
     }
 
-    gettimeofday(&stop, 0);
+    MPI_Gather(bufC, proc_elem, MPI_DOUBLE, C, proc_elem, MPI_DOUBLE, 0, MPI_COMM_WORLD); //сборка данных
+    
+    double end_time = MPI_Wtime();
+    return end_time - start_time;
+}
 
-    printf("The A matrix:\n");
-    for (int i=0; i<N; i++) {
-      for (int j=0; j<N; j++)
-        printf("%6.2f   ", a[i][j]);
-      printf ("\n");
+void InitProcess (double* &A,double* &B,double* &C ,int &Size) {
+    MPI_Comm_size(MPI_COMM_WORLD, &ProcNum);
+    MPI_Comm_rank(MPI_COMM_WORLD, &ProcRank);
+
+    //Broadcasts a message from the process with rank "root" to all other processes of the communicator
+    MPI_Bcast(&Size, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    
+    if (ProcRank == 0) {
+        A = new double [Size*Size];
+        B = new double [Size*Size];
+        C = new double [Size*Size];
+        RandInit (A, Size); RandInit (B, Size);
     }
+}
 
-    printf("The B matrix:\n");
-    for (int i=0; i<N; i++) {
-      for (int j=0; j<N; j++)
-        printf("%6.2f   ", b[i][j]);
-      printf ("\n");
+
+int main(int argc, char **argv) {
+    double beg, end, serial;
+
+    MPI_Init (&argc, &argv);  
+    InitProcess (A, B, C, matrix_size);
+    
+    double parallel = multiply_matrix(A, B, C, matrix_size);
+
+    if (ProcRank == 0) 
+    {
+        printf("Parallel algorithm: %f\n", parallel);
+         
+        double sequential = matrix_s_multiply(A, B, C, matrix_size); //Sequential matrix multiplication
+        printf("Sequential algorithm: %f\n", sequential);
+        
+        printMatrixes(A, B, C, matrix_size);
     }
-
-    printf("The result matrix:\n");
-    for (int i=0; i<N; i++) {
-      for (int j=0; j<N; j++)
-        printf("%6.2f   ", c[i][j]);
-      printf ("\n");
-    }
-
-    fprintf(stdout,"Time = %.6f\n\n",
-         (stop.tv_sec+stop.tv_usec*1e-6)-(start.tv_sec+start.tv_usec*1e-6));
-
-  }
-
-  /* Matrix multiplication */
-  if (rank > 0) {
-    source = 0;
-    MPI_Recv(&offset, 1, MPI_INT, source, 1, MPI_COMM_WORLD, &status);
-    MPI_Recv(&rows, 1, MPI_INT, source, 1, MPI_COMM_WORLD, &status);
-    MPI_Recv(&a, rows*N, MPI_DOUBLE, source, 1, MPI_COMM_WORLD, &status);
-    MPI_Recv(&b, N*N, MPI_DOUBLE, source, 1, MPI_COMM_WORLD, &status);
-
-    for (int k=0; k<N; k++)
-      for (int i=0; i<rows; i++) {
-        c[i][k] = 0.0;
-        for (int j=0; j<N; j++)
-          c[i][k] = c[i][k] + a[i][j] * b[j][k];
-      }
-
-
-    MPI_Send(&offset, 1, MPI_INT, 0, 2, MPI_COMM_WORLD);
-    MPI_Send(&rows, 1, MPI_INT, 0, 2, MPI_COMM_WORLD);
-    MPI_Send(&c, rows*N, MPI_DOUBLE, 0, 2, MPI_COMM_WORLD);
-  }
-
-  MPI_Finalize();
+    MPI_Finalize();
+    delete [] A;
+    delete [] B;
+    delete [] C;  
 }
